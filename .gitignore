@@ -1,0 +1,12 @@
+# Development
+node_modules/
+.DS_Store
+*.log
+
+# Build
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
