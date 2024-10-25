@@ -1,3 +1,15 @@
+console.log('LinkedIn Job Scraper: Content script loaded');
+
+let lastSentJobData = null;
+
+// Function to send logs to the background script
+function sendLogToBackground(message) {
+  chrome.runtime.sendMessage({type: 'CONTENT_LOG', message: message});
+}
+
+// Notify background script that content script is ready
+chrome.runtime.sendMessage({type: 'CONTENT_READY'});
+
 // All scraping functions in one content script
 function cleanText(text) {
   return text
@@ -45,6 +57,8 @@ function extractContent(element) {
 }
 
 function scrapeJobInfo() {
+  sendLogToBackground('Starting job info scraping...');
+
   const selectors = {
     title: [
       '[data-job-title]',
@@ -62,7 +76,8 @@ function scrapeJobInfo() {
       '.topcard__org-name-link',
       '.job-card-container__company-name',
       '.jobs-details-top-card__company-url',
-      '.ember-view [data-test-job-card-company-name]'
+      '.ember-view [data-test-job-card-company-name]',
+      '.jobs-unified-top-card__subtitle-primary-grouping .jobs-unified-top-card__company-name'
     ],
     description: [
       '.jobs-description',
@@ -78,15 +93,13 @@ function scrapeJobInfo() {
     ]
   };
 
-  console.log('Starting job info scraping...');
-
   // Try to get the title
   let title = 'Untitled Job';
   for (const selector of selectors.title) {
     const element = document.querySelector(selector);
     if (element?.textContent.trim()) {
       title = element.textContent.trim();
-      console.log('Found title:', title);
+      sendLogToBackground('Found title: ' + title);
       break;
     }
   }
@@ -97,7 +110,7 @@ function scrapeJobInfo() {
     const element = document.querySelector(selector);
     if (element?.textContent.trim()) {
       company = element.textContent.trim();
-      console.log('Found company:', company);
+      sendLogToBackground('Found company: ' + company);
       break;
     }
   }
@@ -105,41 +118,41 @@ function scrapeJobInfo() {
   // Try to get description from API data first
   let description = null;
   try {
-    console.log('Attempting to get description from API data...');
+    sendLogToBackground('Attempting to get description from API data...');
     const scripts = document.querySelectorAll('code[id^="bpr-guid-"], script[type="application/ld+json"]');
     for (const script of scripts) {
       try {
         const data = JSON.parse(script.textContent);
         if (data.data?.description?.text) {
           description = data.data.description.text;
-          console.log('Found description in API data');
+          sendLogToBackground('Found description in API data');
           break;
         }
         if (data.description) {
           description = data.description;
-          console.log('Found description in LD+JSON');
+          sendLogToBackground('Found description in LD+JSON');
           break;
         }
       } catch (e) {
-        console.log('Error parsing script content:', e);
+        sendLogToBackground('Error parsing script content: ' + e.message);
         continue;
       }
     }
   } catch (e) {
-    console.log('Error parsing API data:', e);
+    sendLogToBackground('Error parsing API data: ' + e.message);
   }
 
   // If API method failed, try DOM selectors
   if (!description) {
-    console.log('Attempting to get description from DOM...');
+    sendLogToBackground('Attempting to get description from DOM...');
     for (const selector of selectors.description) {
       const element = document.querySelector(selector);
       if (element) {
-        console.log('Found potential description element:', selector);
+        sendLogToBackground('Found potential description element: ' + selector);
         const content = extractContent(element);
         if (content && content.trim().length > 0) {
           description = content;
-          console.log('Successfully extracted description');
+          sendLogToBackground('Successfully extracted description');
           break;
         }
       }
@@ -148,19 +161,19 @@ function scrapeJobInfo() {
 
   // Additional fallback for job details
   if (!description) {
-    console.log('Trying fallback method...');
+    sendLogToBackground('Trying fallback method...');
     const jobDetails = document.querySelector('.jobs-search__job-details');
     if (jobDetails) {
       const content = extractContent(jobDetails);
       if (content && content.trim().length > 0) {
         description = content;
-        console.log('Found description using fallback method');
+        sendLogToBackground('Found description using fallback method');
       }
     }
   }
 
   if (!description) {
-    console.error('No description found after all attempts');
+    sendLogToBackground('No description found after all attempts');
     throw new Error('Could not find job description. Please try refreshing the page or selecting a specific job posting.');
   }
 
@@ -172,29 +185,51 @@ function scrapeJobInfo() {
   };
 }
 
+function sendJobDataToApp(jobData) {
+  // Check if the job data is different from the last sent data
+  if (JSON.stringify(jobData) === JSON.stringify(lastSentJobData)) {
+    sendLogToBackground('Job data unchanged, not sending duplicate data');
+    return;
+  }
+
+  sendLogToBackground('Preparing to send job data to app and background script');
+  const message = {
+    type: 'JOB_DATA_UPDATE',
+    jobData: jobData
+  };
+  
+  window.postMessage(message, window.location.origin);
+  
+  // Send job data to background script
+  chrome.runtime.sendMessage(message, (response) => {
+    if (chrome.runtime.lastError) {
+      sendLogToBackground('Error sending JOB_DATA_UPDATE to background: ' + chrome.runtime.lastError.message);
+    } else {
+      sendLogToBackground('JOB_DATA_UPDATE sent to background. Response: ' + JSON.stringify(response));
+      lastSentJobData = jobData; // Update last sent job data
+    }
+  });
+}
+
 function main(sendResponse) {
   try {
     const jobInfo = scrapeJobInfo();
-    console.log('Job info scraped successfully:', jobInfo);
+    sendLogToBackground('Job info scraped successfully');
+    sendJobDataToApp(jobInfo);
     sendResponse({ success: true, data: jobInfo });
   } catch (error) {
-    console.error('Error scraping job info:', error);
+    sendLogToBackground('Error scraping job info: ' + error.message);
     sendResponse({ success: false, error: error.message });
   }
 }
 
 // Listen for messages from the extension
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Received message:', request.action);
   if (request.action === 'scrapeJob') {
-    console.log('Received scrapeJob message');
+    sendLogToBackground('Received scrapeJob message, starting main function');
     main(sendResponse);
     return true; // Indicates that we will send a response asynchronously
-  } else if (request.action === 'ping') {
-    console.log('Received ping message');
-    sendResponse({ success: true, message: 'Content script is loaded' });
-    return true;
   }
 });
 
-console.log('Content script loaded and ready');
+sendLogToBackground('Content script ready');

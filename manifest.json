@@ -3,7 +3,7 @@
     "name": "LinkedIn Job Scraper",
     "version": "1.0",
     "description": "Scrapes job information from LinkedIn job postings",
-    "permissions": ["activeTab", "scripting", "storage"],
+    "permissions": ["activeTab", "scripting", "storage", "tabs"],
     "host_permissions": [
         "https://www.linkedin.com/*",
         "http://localhost:3000/*",
@@ -21,6 +21,18 @@
         "service_worker": "js/background.js",
         "type": "module"
     },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.linkedin.com/jobs/*",
+                "https://www.linkedin.com/job/*",
+                "https://www.linkedin.com/jobs/view/*",
+                "https://www.linkedin.com/jobs/search/*"
+            ],
+            "js": ["js/content-script.js"],
+            "run_at": "document_idle"
+        }
+    ],
     "action": {
         "default_popup": "popup.html",
         "default_icon": {
