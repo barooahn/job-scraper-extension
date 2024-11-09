@@ -6,10 +6,57 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('closePopup').addEventListener('click', () => window.close());
 });
 
+// API endpoint configuration
+const API_ENDPOINTS = [
+  'http://localhost:3000/api/job-data',
+  'https://ai-job-platform-frontend-189284322477.europe-west2.run.app/api/job-data',
+  'https://job-ai-platform.vercel.app/api/job-data'
+];
+
+async function tryEndpoint(endpoint, jobData) {
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(jobData)
+    });
+    
+    if (response.ok) {
+      return { success: true, endpoint };
+    }
+    return { success: false, error: `Failed to send data to ${endpoint}` };
+  } catch (error) {
+    console.error(`Error with endpoint ${endpoint}:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function sendJobData(jobData) {
+  let lastError = null;
+  
+  for (const endpoint of API_ENDPOINTS) {
+    const result = await tryEndpoint(endpoint, jobData);
+    if (result.success) {
+      console.log(`Successfully sent data to ${endpoint}`);
+      return { success: true, endpoint };
+    }
+    lastError = result.error;
+  }
+  
+  throw new Error(`All endpoints failed. Last error: ${lastError}`);
+}
+
 function updateUIFromStorage(savedJob) {
   const resultDiv = document.getElementById('result');
   const button = document.getElementById('scrapeButton');
   const savedJobInfo = document.getElementById('savedJobInfo');
+
+  // Reset UI elements first
+  button.disabled = false;
+  resultDiv.className = '';
+  savedJobInfo.innerHTML = '';
 
   if (savedJob) {
     button.textContent = 'Paste Job';
@@ -40,9 +87,7 @@ function updateUIFromStorage(savedJob) {
     resultDiv.className = 'success-message';
   } else {
     button.textContent = 'Get Job Details';
-    savedJobInfo.innerHTML = '';
     resultDiv.textContent = 'Ready to scrape job details';
-    resultDiv.className = '';
   }
 }
 
@@ -60,13 +105,29 @@ function toggleJobDetails() {
 }
 
 async function clearSavedJob() {
-  await chrome.storage.local.remove('savedJob');
+  // Clear both storage and UI
+  await chrome.storage.local.clear(); // Clear all storage instead of just removing 'savedJob'
+  const button = document.getElementById('scrapeButton');
+  button.textContent = 'Get Job Details';
+  button.disabled = false;
   updateUIFromStorage(null);
+  
+  // Force refresh the active tab to ensure clean state
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab) {
+    await chrome.tabs.sendMessage(tab.id, { action: 'clearJobData' });
+  }
+  
+  // Reset the result div
+  const resultDiv = document.getElementById('result');
+  resultDiv.textContent = 'Ready to scrape job details';
+  resultDiv.className = '';
 }
+
 async function isContentScriptLoaded(tabId) {
   try {
-    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-    return true;
+    const response = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+    return response && response.success;
   } catch (error) {
     console.log('Content script not loaded:', error);
     return false;
@@ -99,37 +160,30 @@ document.getElementById('scrapeButton').addEventListener('click', async () => {
 
     if (savedJob) {
       try {
-        console.log('Sending saved job data to server');
-        const response = await fetch('http://localhost:3000/api/job-data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            title: savedJob.title,
-            company: savedJob.company,
-            description: savedJob.description,
-            link: savedJob.link
-          })
-        });
+        console.log('Attempting to send saved job data');
+        const jobData = {
+          title: savedJob.title,
+          company: savedJob.company,
+          description: savedJob.description,
+          link: savedJob.link
+        };
 
-        if (response.ok) {
-          await chrome.storage.local.remove('savedJob');
-          updateUIFromStorage(null);
-          resultDiv.innerHTML = 'Data sent successfully! You can close this popup.';
+        const result = await sendJobData(jobData);
+        
+        if (result.success) {
+          await clearSavedJob(); // Use the new clearSavedJob function
+          resultDiv.innerHTML = `Data sent successfully to ${result.endpoint}! You can close this popup.`;
           resultDiv.className = 'success-message';
-        } else {
-          throw new Error('Failed to send data');
         }
       } catch (error) {
         console.error('Error sending data:', error);
-        resultDiv.textContent = 'Error sending data. Please try again.';
+        resultDiv.textContent = `Error sending data: ${error.message}`;
         resultDiv.className = 'error-message';
       }
       return;
     }
 
-    if (!tab.url.includes('linkedin.com')) {
+    if (!tab.url.includes('linkedin.com/jobs')) {
       throw new Error('Please navigate to a LinkedIn job posting');
     }
 
@@ -143,7 +197,12 @@ document.getElementById('scrapeButton').addEventListener('click', async () => {
         target: { tabId: tab.id },
         files: ['js/content-script.js']
       });
+      // Wait a short time for the content script to initialize
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
+
+    // Clear any existing job data before scraping
+    await chrome.storage.local.clear();
 
     console.log('Sending scrapeJob message to content script');
     const response = await sendMessageToContentScript(tab.id, { action: 'scrapeJob' });
@@ -159,12 +218,14 @@ document.getElementById('scrapeButton').addEventListener('click', async () => {
       throw new Error('No job description found. Please make sure the job details are loaded.');
     }
 
+    // Store the new job data
     await chrome.storage.local.set({
       savedJob: {
         title: jobInfo.title,
         company: jobInfo.company,
         description: jobInfo.description,
-        link: jobInfo.link
+        link: jobInfo.link,
+        timestamp: Date.now() // Add timestamp to track when the job was saved
       }
     });
 
@@ -183,7 +244,7 @@ document.getElementById('scrapeButton').addEventListener('click', async () => {
     resultDiv.textContent = 'Error: ' + error.message;
     resultDiv.className = 'error-message';
     button.textContent = 'Get Job Details';
-    await chrome.storage.local.remove('savedJob');
+    await clearSavedJob(); // Use the new clearSavedJob function
   } finally {
     button.disabled = false;
   }

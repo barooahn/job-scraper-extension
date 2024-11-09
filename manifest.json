@@ -8,13 +8,13 @@
         "https://www.linkedin.com/*",
         "http://localhost:3000/*",
         "https://ai-job-platform-frontend-189284322477.europe-west2.run.app/*",
-        "https://job-ai-platform.vercel.app//*"
+        "https://job-ai-platform.vercel.app/*"
     ],
     "externally_connectable": {
         "matches": [
             "http://localhost:3000/*",
             "https://ai-job-platform-frontend-189284322477.europe-west2.run.app/*",
-            "https://job-ai-platform.vercel.app//*"
+            "https://job-ai-platform.vercel.app/*"
         ]
     },
     "background": {
